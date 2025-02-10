@@ -4,6 +4,7 @@ import 'dart:developer';
 import 'package:call_recording_app/models/recording.dart';
 import 'package:call_recording_app/utils/permission_util.dart';
 import 'package:flutter/material.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:record/record.dart';
@@ -15,7 +16,12 @@ class CallRecorderService {
   bool _isRecording = false;
   String? _currentRecordingPath;
   bool _isAutoRecordEnabled = false;
+  bool _isCallInProgress = false;
   StreamSubscription<PhoneState>? _phoneStateSubscription;
+
+  bool get isAutoRecordEnabled => _isAutoRecordEnabled;
+
+  bool get isRecording => _isRecording;
 
   Function(bool)? onRecordingStateChanged;
 
@@ -42,11 +48,13 @@ class CallRecorderService {
 
     switch (event.status) {
       case PhoneStateStatus.CALL_STARTED:
-        if (_isAutoRecordEnabled && !_isRecording) {
+        if (!_isCallInProgress && _isAutoRecordEnabled && !_isRecording) {
+          _isCallInProgress = true;
           await startRecording(null);
         }
         break;
       case PhoneStateStatus.CALL_ENDED:
+        _isCallInProgress = false;
         if (_isRecording) {
           final path = await stopRecording();
           if (path != null) {
@@ -86,7 +94,7 @@ class CallRecorderService {
           }
         }
 
-        final directory = await getExternalStorageDirectory();
+        final directory = await _getStorageDirectory();
         if (directory == null) {
           throw Exception('Unable to access external storage');
         }
@@ -110,7 +118,11 @@ class CallRecorderService {
           encoder: AudioEncoder.aacLc,
           bitRate: 128000,
           sampleRate: 44100,
-          numChannels: 2,
+          numChannels: 1,
+          device: null,
+          echoCancel: true,
+          noiseSuppress: true,
+          autoGain: true,
         );
 
         await _recorder.start(config, path: _currentRecordingPath!);
@@ -133,14 +145,25 @@ class CallRecorderService {
         _isRecording = false;
         onRecordingStateChanged?.call(false);
 
-        // Verify the recording file
+        /// Verify the recording file
         final file = File(_currentRecordingPath!);
         if (await file.exists()) {
           final size = await file.length();
           if (size > 1024) {
-            /// Only keep files larger than 1KB
-            log('Recording saved successfully: $_currentRecordingPath ($size bytes)');
-            return _currentRecordingPath;
+            /// Verify file is readable
+            try {
+              final testPlayer = AudioPlayer();
+              await testPlayer
+                  .setAudioSource(AudioSource.file(_currentRecordingPath!));
+              await testPlayer.dispose();
+
+              log('Recording saved successfully: $_currentRecordingPath ($size bytes)');
+              return _currentRecordingPath;
+            } catch (e) {
+              log('Recording file is corrupt, deleting: $_currentRecordingPath');
+              await file.delete();
+              return null;
+            }
           } else {
             log('Recording file too small, deleting: $_currentRecordingPath');
             await file.delete();
@@ -165,37 +188,49 @@ class CallRecorderService {
 
   Future<List<Recording>> getRecordings() async {
     try {
-      final directory = await getExternalStorageDirectory();
+      final directory = await _getStorageDirectory();
       if (directory == null) return [];
+
+      log('Checking directory: ${directory.path}');
 
       final List<Recording> validRecordings = [];
 
-      final files =
-          directory.listSync().where((file) => file.path.endsWith('.m4a'));
-      for (final file in files) {
-        try {
-          final stats = file.statSync();
-          if (stats.size > 1024) {
-            /// Only include files larger than 1KB
-            final fileName = file.path.split('/').last;
-            final timestamp = int.parse(fileName.split('_')[1].split('.')[0]);
+      // List files in the Recordings directory
+      if (await directory.exists()) {
+        final files = directory
+            .listSync(recursive: false)
+            .whereType<File>()
+            .where((file) => file.path.toLowerCase().endsWith('.m4a'));
 
-            validRecordings.add(Recording(
-              path: file.path,
-              fileName: fileName,
-              timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp),
-              size: stats.size,
-            ));
-          } else {
-            /// Delete small/empty files
-            await (file as File).delete();
+        for (final file in files) {
+          try {
+            final stats = file.statSync();
+            if (stats.size > 1024) {
+              // Only include files larger than 1KB
+              final fileName = file.path.split('/').last;
+              // Extract timestamp from filename (call_timestamp.m4a)
+              final timestamp = int.parse(fileName.split('_')[1].split('.')[0]);
+
+              validRecordings.add(Recording(
+                path: file.path,
+                fileName: fileName,
+                timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp),
+                size: stats.size,
+              ));
+              log('Found recording: $fileName, size: ${stats.size}');
+            } else {
+              log('Skipping small file: ${file.path}');
+              await file.delete();
+            }
+          } catch (e) {
+            log('Error processing recording file ${file.path}: $e');
           }
-        } catch (e) {
-          log('Error processing recording file: $e');
         }
       }
 
+      // Sort by timestamp, newest first
       validRecordings.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      log('Found ${validRecordings.length} valid recordings');
       return validRecordings;
     } catch (e) {
       log('Error getting recordings: $e');
@@ -216,9 +251,22 @@ class CallRecorderService {
     }
   }
 
-  bool get isAutoRecordEnabled => _isAutoRecordEnabled;
-
-  bool get isRecording => _isRecording;
+  Future<Directory?> _getStorageDirectory() async {
+    try {
+      final externalDir = await getExternalStorageDirectory();
+      if (externalDir != null) {
+        final recordingsDir = Directory('${externalDir.path}/Recordings');
+        if (!await recordingsDir.exists()) {
+          await recordingsDir.create(recursive: true);
+        }
+        return recordingsDir;
+      }
+      return null;
+    } catch (e) {
+      log('Error getting storage directory: $e');
+      return null;
+    }
+  }
 
   Future<void> dispose() async {
     await _phoneStateSubscription?.cancel();

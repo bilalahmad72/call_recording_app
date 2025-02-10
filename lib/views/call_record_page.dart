@@ -1,10 +1,11 @@
+import 'dart:async';
+
 import 'package:call_recording_app/models/recording.dart';
 import 'package:call_recording_app/services/audio_player_service.dart';
 import 'package:call_recording_app/services/call_recording_service.dart';
 import 'package:call_recording_app/utils/permission_util.dart';
 import 'package:call_recording_app/views/settings_page.dart';
 import 'package:flutter/material.dart';
-import 'package:just_audio/just_audio.dart';
 
 class CallRecorderPage extends StatefulWidget {
   const CallRecorderPage({super.key});
@@ -19,20 +20,44 @@ class _CallRecorderPageState extends State<CallRecorderPage> {
   List<Recording> recordings = [];
   bool isRecording = false;
 
-  bool _initializedPermissions = false;
-
   @override
   void initState() {
     super.initState();
-    _initializeRecorder();
+    _initializeApp();
   }
 
   Future<void> _initializeApp() async {
-    if (!_initializedPermissions) {
-      await PermissionUtils.checkAndRequestPermissions(context);
-      _initializedPermissions = true;
+    try {
+      _recorderService.onRecordingStateChanged = (recording) async {
+        setState(() => isRecording = recording);
+        if (!recording) {
+          await Future.delayed(const Duration(milliseconds: 500));
+          await _loadRecordings();
+        }
+      };
+
+      await _recorderService.initialize();
+      await _loadRecordings();
+
+      // Periodically refresh the recordings list
+      Timer.periodic(const Duration(seconds: 5), (_) {
+        if (mounted) {
+          _loadRecordings();
+        }
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error initializing: $e')),
+        );
+      }
     }
-    await _initializeRecorder();
+  }
+
+  Future<void> _loadRecordings() async {
+    if (!mounted) return;
+    final files = await _recorderService.getRecordings();
+    setState(() => recordings = files);
   }
 
   Future<void> _initializeRecorder() async {
@@ -53,11 +78,6 @@ class _CallRecorderPageState extends State<CallRecorderPage> {
         );
       }
     }
-  }
-
-  Future<void> _loadRecordings() async {
-    final files = await _recorderService.getRecordings();
-    setState(() => recordings = files);
   }
 
   String _formatFileSize(int bytes) {

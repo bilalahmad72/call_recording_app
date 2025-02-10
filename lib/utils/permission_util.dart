@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -26,25 +27,27 @@ class PermissionUtils {
       Permission.phone,
       Permission.microphone,
       Permission.audio,
+      Permission.notification,
     ];
 
-    /// Check current status
-    final statuses =
-        await Future.wait(permissions.map((permission) => permission.status));
-
-    if (statuses.every((status) => status.isGranted)) {
-      return true;
-    }
-
-    /// Request permissions
-    final results = await permissions.request();
-
-    if (results.values.any((status) => status.isDenied) && context.mounted) {
-      bool shouldRequest = await _showPermissionDialog(context);
-      if (shouldRequest) {
-        await openAppSettings();
+    // Request each permission individually
+    for (var permission in permissions) {
+      final status = await permission.status;
+      if (!status.isGranted) {
+        final result = await permission.request();
+        if (!result.isGranted) {
+          if (context.mounted) {
+            final shouldOpenSettings = await _showPermissionDialog(
+              context,
+              permission: _getPermissionName(permission),
+            );
+            if (shouldOpenSettings) {
+              await openAppSettings();
+            }
+          }
+          return false;
+        }
       }
-      return false;
     }
 
     return true;
@@ -58,21 +61,18 @@ class PermissionUtils {
       Permission.storage,
     ];
 
-    /// Check current status
-    final statuses =
-        await Future.wait(permissions.map((permission) => permission.status));
+    // Request permissions
+    Map<Permission, PermissionStatus> statuses = await permissions.request();
 
-    if (statuses.every((status) => status.isGranted)) {
-      return true;
-    }
-
-    /// Request permissions
-    final results = await permissions.request();
-
-    if (results.values.any((status) => status.isDenied) && context.mounted) {
-      bool shouldRequest = await _showPermissionDialog(context);
-      if (shouldRequest) {
-        await openAppSettings();
+    if (statuses.values.any((status) => status.isDenied)) {
+      if (context.mounted) {
+        final shouldOpenSettings = await _showPermissionDialog(
+          context,
+          permission: 'required permissions',
+        );
+        if (shouldOpenSettings) {
+          await openAppSettings();
+        }
       }
       return false;
     }
@@ -80,20 +80,38 @@ class PermissionUtils {
     return true;
   }
 
-  static Future<bool> _showPermissionDialog(BuildContext context) async {
-    return await showDialog(
+  static String _getPermissionName(Permission permission) {
+    switch (permission) {
+      case Permission.phone:
+        return 'Phone';
+      case Permission.microphone:
+        return 'Microphone';
+      case Permission.audio:
+        return 'Media & Audio';
+      case Permission.notification:
+        return 'Notifications';
+      default:
+        return permission.toString();
+    }
+  }
+
+  static Future<bool> _showPermissionDialog(
+    BuildContext context, {
+    required String permission,
+  }) async {
+    return await showDialog<bool>(
           context: context,
           barrierDismissible: false,
           builder: (BuildContext context) {
             return AlertDialog(
-              title: const Text('Permissions Required'),
-              content: const Text(
-                'This app needs access to phone, microphone, and storage to record calls. '
-                'Please grant these permissions in Settings.',
+              title: const Text('Permission Required'),
+              content: Text(
+                'This app needs access to $permission to function properly. '
+                'Please grant the permission in Settings.',
               ),
               actions: <Widget>[
                 TextButton(
-                  child: const Text('Cancel'),
+                  child: const Text('Not Now'),
                   onPressed: () => Navigator.of(context).pop(false),
                 ),
                 TextButton(

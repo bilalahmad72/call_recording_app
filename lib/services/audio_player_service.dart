@@ -31,9 +31,18 @@ class AudioPlayerService {
         }
 
         /// Set the audio source and play
-        await _player.setFilePath(path);
-        await _player.play();
-        _currentlyPlayingPath = path;
+        try {
+          await _player.setAudioSource(AudioSource.file(path));
+          await _player.play();
+          _currentlyPlayingPath = path;
+        } catch (e) {
+          log('Error setting audio source: $e');
+          // Try alternative method
+          final uri = Uri.file(path);
+          await _player.setUrl(uri.toString());
+          await _player.play();
+          _currentlyPlayingPath = path;
+        }
       }
     } catch (e) {
       log('Error playing recording: $e');
