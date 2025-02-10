@@ -93,6 +93,7 @@ class _CallRecorderPageState extends State<CallRecorderPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      /// appbar
       appBar: AppBar(
         title: Text('Call Recorder'),
         actions: [
@@ -109,8 +110,11 @@ class _CallRecorderPageState extends State<CallRecorderPage> {
           ),
         ],
       ),
+
+      /// body
       body: Column(
         children: [
+          ///
           Card(
             margin: EdgeInsets.all(8),
             child: Padding(
@@ -130,6 +134,8 @@ class _CallRecorderPageState extends State<CallRecorderPage> {
               ),
             ),
           ),
+
+          ///
           Expanded(
             child: ListView.builder(
               itemCount: recordings.length,
@@ -154,15 +160,20 @@ class _CallRecorderPageState extends State<CallRecorderPage> {
                             await _audioPlayer.playRecording(recording.path);
                             setState(() {});
                           } catch (e) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                  content: Text('Error playing recording: $e')),
-                            );
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                      'Error playing recording: ${e.toString()}'),
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            }
                           }
                         },
                       ),
                       IconButton(
-                        icon: Icon(Icons.delete),
+                        icon: const Icon(Icons.delete),
                         onPressed: () async {
                           try {
                             if (_audioPlayer.currentlyPlayingPath ==
@@ -173,11 +184,13 @@ class _CallRecorderPageState extends State<CallRecorderPage> {
                                 .deleteRecording(recording.path);
                             await _loadRecordings();
                           } catch (e) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('Error deleting recording: $e'),
-                              ),
-                            );
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                    content:
+                                        Text('Error deleting recording: $e')),
+                              );
+                            }
                           }
                         },
                       ),

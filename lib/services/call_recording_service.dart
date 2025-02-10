@@ -86,34 +86,37 @@ class CallRecorderService {
           }
         }
 
-        // Make sure we have a valid directory
         final directory = await getExternalStorageDirectory();
         if (directory == null) {
           throw Exception('Unable to access external storage');
         }
 
-        // Create directory if it doesn't exist
+        /// Ensure directory exists
         if (!await directory.exists()) {
           await directory.create(recursive: true);
         }
 
+        /// Create a unique filename with timestamp
         final timestamp = DateTime.now().millisecondsSinceEpoch;
         _currentRecordingPath = '${directory.path}/call_$timestamp.m4a';
 
-        log('Starting recording at: $_currentRecordingPath');
+        /// Delete any existing file with the same name
+        final file = File(_currentRecordingPath!);
+        if (await file.exists()) {
+          await file.delete();
+        }
 
         final config = RecordConfig(
           encoder: AudioEncoder.aacLc,
           bitRate: 128000,
           sampleRate: 44100,
-          numChannels: 1,
-          device: null, // Let the system choose the appropriate device
+          numChannels: 2,
         );
 
         await _recorder.start(config, path: _currentRecordingPath!);
         _isRecording = true;
         onRecordingStateChanged?.call(true);
-        log('Recording started successfully');
+        log('Recording started at: $_currentRecordingPath');
       } catch (e) {
         log('Error starting recording: $e');
         _isRecording = false;
@@ -124,29 +127,31 @@ class CallRecorderService {
   }
 
   Future<String?> stopRecording() async {
-    if (_isRecording) {
+    if (_isRecording && _currentRecordingPath != null) {
       try {
         await _recorder.stop();
         _isRecording = false;
         onRecordingStateChanged?.call(false);
 
-        /// Verify file exists and has content
+        // Verify the recording file
         final file = File(_currentRecordingPath!);
         if (await file.exists()) {
           final size = await file.length();
-          if (size > 0) {
-            log('Recording stopped successfully. File size: $size bytes');
+          if (size > 1024) {
+            /// Only keep files larger than 1KB
+            log('Recording saved successfully: $_currentRecordingPath ($size bytes)');
             return _currentRecordingPath;
           } else {
-            log('Recording file is empty');
+            log('Recording file too small, deleting: $_currentRecordingPath');
             await file.delete();
-            return null;
           }
         }
         return null;
       } catch (e) {
         log('Error stopping recording: $e');
         return null;
+      } finally {
+        _currentRecordingPath = null;
       }
     }
     return null;
@@ -163,25 +168,35 @@ class CallRecorderService {
       final directory = await getExternalStorageDirectory();
       if (directory == null) return [];
 
-      final files = directory
-          .listSync()
-          .where((file) => file.path.endsWith('.m4a'))
-          .map((file) {
-        final stats = file.statSync();
-        return Recording(
-          path: file.path,
-          fileName: file.path.split('/').last,
-          timestamp: DateTime.fromMillisecondsSinceEpoch(
-              int.parse(file.path.split('/').last.split('_')[1].split('.')[0])),
-          size: stats.size,
-        );
-      }).toList();
+      final List<Recording> validRecordings = [];
 
-      // Sort by timestamp, newest first
-      files.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      final files =
+          directory.listSync().where((file) => file.path.endsWith('.m4a'));
+      for (final file in files) {
+        try {
+          final stats = file.statSync();
+          if (stats.size > 1024) {
+            /// Only include files larger than 1KB
+            final fileName = file.path.split('/').last;
+            final timestamp = int.parse(fileName.split('_')[1].split('.')[0]);
 
-      log('Found ${files.length} recordings');
-      return files;
+            validRecordings.add(Recording(
+              path: file.path,
+              fileName: fileName,
+              timestamp: DateTime.fromMillisecondsSinceEpoch(timestamp),
+              size: stats.size,
+            ));
+          } else {
+            /// Delete small/empty files
+            await (file as File).delete();
+          }
+        } catch (e) {
+          log('Error processing recording file: $e');
+        }
+      }
+
+      validRecordings.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+      return validRecordings;
     } catch (e) {
       log('Error getting recordings: $e');
       return [];
